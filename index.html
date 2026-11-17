@@ -50,12 +50,12 @@ tr:last-child td{border-bottom:none}
     <select id="fName"><option value="">全員</option></select>
   </div>
   <div class="filter-group">
-    <label>年</label>
-    <select id="fYear"><option value="">すべて</option></select>
+    <label>期間（開始）</label>
+    <select id="fFrom"><option value="">最初から</option></select>
   </div>
   <div class="filter-group">
-    <label>月</label>
-    <select id="fMonth"><option value="">すべて</option></select>
+    <label>期間（終了）</label>
+    <select id="fTo"><option value="">最新まで</option></select>
   </div>
   <div class="filter-group">
     <label>&nbsp;</label>
@@ -145,46 +145,68 @@ let all = [], charts = {};
 function fmt(n){ return (n===null||n===undefined||isNaN(n)||n===0)?'—':Number(n).toFixed(1); }
 function fmtY(n){ return (!n||isNaN(n)||n===0)?'—':'¥'+Math.round(n).toLocaleString(); }
 
-function parseDate(dateStr) {
+function pad(n){ return String(parseInt(n)).padStart(2,'0'); }
+
+function parseDate(dateStr, fallbackYear) {
   if (!dateStr) return null;
-  const s = String(dateStr);
-  if (s.match(/^\d{4}\/\d{1,2}\/\d{1,2}$/)) return s;
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})$/);
-  if (m) {
-    const mo = parseInt(m[1]);
-    const year = mo >= 10 ? 2024 : 2025;
-    return `${year}/${String(mo).padStart(2,'0')}/${String(parseInt(m[2])).padStart(2,'0')}`;
+  const s = String(dateStr).trim();
+  let m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (m) return `${m[1]}/${pad(m[2])}/${pad(m[3])}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (m) return `${fallbackYear}/${pad(m[1])}/${pad(m[2])}`;
+  const d = new Date(s); // ISO形式など（日本時間に直す）
+  if (!isNaN(d)) {
+    const j = new Date(d.getTime() + 9*3600*1000);
+    return `${j.getUTCFullYear()}/${pad(j.getUTCMonth()+1)}/${pad(j.getUTCDate())}`;
   }
-  return s;
+  return null;
 }
 
 async function loadData() {
   try {
     const r = await fetch(API);
     all = await r.json();
-    all = all.map(d => ({...d, fullDate: parseDate(d.date)}));
+    // 年なし(月/日)で届いた場合だけ、行の順番から年を推定する
+    let year = 2025, prevMonth = 0;
+    all = all.map(d => {
+      const m = String(d.date || '').match(/^(\d{1,2})\/\d{1,2}$/);
+      if (m) {
+        const mo = parseInt(m[1]);
+        if (mo < prevMonth) year++;
+        prevMonth = mo;
+      }
+      return {...d, fullDate: parseDate(d.date, year)};
+    });
     populateFilters();
     applyFilters();
   } catch(e) { console.error(e); }
 }
 
 function populateFilters() {
-  const names = [...new Set(all.map(d => d.name))].sort();
+  const keep = id => document.getElementById(id).value;
+  const curName = keep('fName'), curFrom = keep('fFrom'), curTo = keep('fTo');
+  const names = [...new Set(all.map(d => d.name))].filter(Boolean).sort();
   document.getElementById('fName').innerHTML = '<option value="">全員</option>' + names.map(n => `<option>${n}</option>`).join('');
-  const years = [...new Set(all.map(d => d.fullDate ? d.fullDate.slice(0,4) : ''))].filter(Boolean).sort();
-  document.getElementById('fYear').innerHTML = '<option value="">すべて</option>' + years.map(y => `<option>${y}</option>`).join('');
-  const months = [...new Set(all.map(d => d.fullDate ? d.fullDate.slice(5,7) : ''))].filter(Boolean).sort();
-  document.getElementById('fMonth').innerHTML = '<option value="">すべて</option>' + months.map(m => `<option value="${m}">${parseInt(m)}月</option>`).join('');
+  const months = [...new Set(all.map(d => d.fullDate ? d.fullDate.slice(0,7) : ''))].filter(Boolean).sort();
+  const opts = months.map(m => `<option value="${m}">${m.slice(0,4)}年${parseInt(m.slice(5,7))}月</option>`).join('');
+  document.getElementById('fFrom').innerHTML = '<option value="">最初から</option>' + opts;
+  document.getElementById('fTo').innerHTML = '<option value="">最新まで</option>' + opts;
+  document.getElementById('fName').value = curName;
+  document.getElementById('fFrom').value = curFrom;
+  document.getElementById('fTo').value = curTo;
 }
 
 function applyFilters() {
   const name = document.getElementById('fName').value;
-  const year = document.getElementById('fYear').value;
-  const month = document.getElementById('fMonth').value;
+  let from = document.getElementById('fFrom').value;
+  let to = document.getElementById('fTo').value;
+  if (from && to && from > to) { [from, to] = [to, from]; }
   let f = all.filter(d => {
     if (name && d.name !== name) return false;
-    if (year && d.fullDate && !d.fullDate.startsWith(year)) return false;
-    if (month && d.fullDate && d.fullDate.slice(5,7) !== month) return false;
+    const ym = d.fullDate ? d.fullDate.slice(0,7) : '';
+    if ((from || to) && !ym) return false;
+    if (from && ym < from) return false;
+    if (to && ym > to) return false;
     return true;
   });
   renderMetrics(f);
@@ -300,6 +322,7 @@ function destroyChart(id) {
   if(charts[id]) { charts[id].destroy(); delete charts[id]; }
 }
 
+['fName','fFrom','fTo'].forEach(id => document.getElementById(id).addEventListener('change', applyFilters));
 loadData();
 </script>
 </body>
